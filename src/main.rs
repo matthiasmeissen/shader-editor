@@ -1,116 +1,360 @@
-#![allow(clippy::undocumented_unsafe_blocks)]
-
+use std::collections::HashMap;
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
 
 use eframe::egui_glow;
 use egui::mutex::Mutex;
 use egui_glow::glow;
 use notify::{RecommendedWatcher, Watcher, RecursiveMode};
 
-// --- MODIFIED ---
-// We now need to store the glow::Context for recompiling shaders at runtime.
-// The file watcher and a channel for communication are also added.
+// Configuration constants
+const DEFAULT_SHADER_PATH: &str = "shaders/shader.frag";
+const RELOAD_DEBOUNCE_MS: u64 = 100;
+const FILE_CHECK_TIMEOUT_MS: u64 = 1;
+
+/// Represents a detected uniform and its metadata
+#[derive(Debug, Clone)]
+pub struct UniformInfo {
+    name: String,
+    uniform_type: UniformType,
+    value: UniformValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum UniformType {
+    Float,
+    Vec2,
+    Vec3,
+    Vec4,
+}
+
+#[derive(Debug, Clone)]
+pub enum UniformValue {
+    Float(f32),
+    Vec2([f32; 2]),
+    Vec3([f32; 3]),
+    Vec4([f32; 4]),
+}
+
+impl UniformValue {
+    fn default_for_type(uniform_type: &UniformType) -> Self {
+        match uniform_type {
+            UniformType::Float => UniformValue::Float(1.0),
+            UniformType::Vec2 => UniformValue::Vec2([0.5, 0.5]),
+            UniformType::Vec3 => UniformValue::Vec3([0.5, 0.5, 0.5]),
+            UniformType::Vec4 => UniformValue::Vec4([1.0, 1.0, 1.0, 1.0]),
+        }
+    }
+}
+
 pub struct ShaderApp {
     gl: Arc<glow::Context>,
     shader_renderer: Arc<Mutex<ShaderRenderer>>,
     time: f32,
+    auto_time: bool,
     shader_error: Arc<Mutex<Option<String>>>,
-    _watcher: RecommendedWatcher,
+    watcher: Option<RecommendedWatcher>,
     shader_update_receiver: mpsc::Receiver<()>,
+    last_reload: Instant,
+    uniforms: HashMap<String, UniformInfo>,
+    current_shader_path: PathBuf,
 }
 
 impl ShaderApp {
     pub fn new<'a>(cc: &'a eframe::CreationContext<'a>) -> Option<Self> {
         let gl = cc.gl.as_ref()?.clone();
 
-        // --- MODIFIED ---
-        // Read the initial shader source. This can still panic on startup
-        // if the file is missing.
-        let initial_shader_source =
-    std::fs::read_to_string("shaders/shader.frag").expect("Failed to read fragment shader on startup");
-        
-        // Attempt to compile the initial shader.
-        let shader_renderer =
-            ShaderRenderer::new(&gl, &initial_shader_source).expect("Failed to compile initial shader");
+        let shader_path = PathBuf::from(DEFAULT_SHADER_PATH);
 
-        // --- NEW ---
-        // Set up a channel to receive file change notifications.
-        let (tx, rx) = mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                if event.kind.is_modify() || event.kind.is_create() {
-                    // Send a simple signal. We don't need the event details.
-                    let _ = tx.send(());
-                }
-            }
-        }).ok()?;
+        // SAFETY: Reading shader file during initialization.
+        // If the file is missing, we fail fast with a clear error message.
+        let initial_shader_source = std::fs::read_to_string(&shader_path)
+            .expect("Failed to read fragment shader on startup");
         
-        watcher.watch(std::path::Path::new("shaders/shader.frag"), RecursiveMode::NonRecursive).ok()?;
+        // Detect uniforms from the shader source
+        let detected_uniforms = parse_uniforms(&initial_shader_source);
+        
+        // SAFETY: Compiling initial shader with OpenGL context.
+        // Context is guaranteed to be valid during CreationContext.
+        let shader_renderer = ShaderRenderer::new(&gl, &initial_shader_source)
+            .expect("Failed to compile initial shader");
+
+        // Set up file watcher with debouncing
+        let (tx, rx) = mpsc::channel();
+        let watcher = Self::create_watcher(&shader_path, tx);
+
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
         Some(Self {
             gl,
             shader_renderer: Arc::new(Mutex::new(shader_renderer)),
             time: 0.0,
+            auto_time: true,
             shader_error: Arc::new(Mutex::new(None)),
-            _watcher: watcher,
+            watcher,
             shader_update_receiver: rx,
+            last_reload: Instant::now(),
+            uniforms: detected_uniforms,
+            current_shader_path: shader_path,
         })
+    }
+
+    fn create_watcher(path: &Path, tx: mpsc::Sender<()>) -> Option<RecommendedWatcher> {
+        let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                if event.kind.is_modify() || event.kind.is_create() {
+                    let _ = tx.send(());
+                }
+            }
+        }).ok()?;
+        
+        // SAFETY: Watching a single file path that exists.
+        // Errors are handled gracefully by returning None.
+        watcher.watch(path, RecursiveMode::NonRecursive).ok()?;
+        Some(watcher)
+    }
+
+    fn load_shader_file(&mut self, path: PathBuf) {
+        // Stop watching the old file
+        if let Some(watcher) = &mut self.watcher {
+            let _ = watcher.unwatch(&self.current_shader_path);
+        }
+
+        // Update current path
+        self.current_shader_path = path;
+
+        // Create new watcher for the new file
+        let (tx, rx) = mpsc::channel();
+        self.watcher = Self::create_watcher(&self.current_shader_path, tx);
+        self.shader_update_receiver = rx;
+
+        // Load and compile the new shader
+        match std::fs::read_to_string(&self.current_shader_path) {
+            Ok(shader_source) => {
+                let new_uniforms = parse_uniforms(&shader_source);
+                
+                match ShaderRenderer::new(&self.gl, &shader_source) {
+                    Ok(new_renderer) => {
+                        {
+                            let mut renderer_guard = self.shader_renderer.lock();
+                            renderer_guard.destroy(&self.gl);
+                            *renderer_guard = new_renderer;
+                        }
+                        
+                        *self.shader_error.lock() = None;
+                        self.uniforms = new_uniforms;
+                        log::info!("Shader loaded successfully: {:?}", self.current_shader_path);
+                    }
+                    Err(e) => {
+                        *self.shader_error.lock() = Some(e.clone());
+                        log::error!("Shader compilation failed: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                let error_message = format!("Failed to read shader file: {}", e);
+                *self.shader_error.lock() = Some(error_message);
+            }
+        }
+    }
+
+    fn try_reload_shader(&mut self) {
+        // Debounce: ignore rapid successive file changes
+        if self.last_reload.elapsed() < Duration::from_millis(RELOAD_DEBOUNCE_MS) {
+            return;
+        }
+        
+        log::info!("Shader file changed, attempting to reload...");
+        
+        match std::fs::read_to_string(&self.current_shader_path) {
+            Ok(new_source) => {
+                // Detect uniforms before compilation
+                let new_uniforms = parse_uniforms(&new_source);
+                
+                // SAFETY: Compiling shader with valid OpenGL context.
+                // The context is owned by the app and guaranteed to be valid.
+                match ShaderRenderer::new(&self.gl, &new_source) {
+                    Ok(new_renderer) => {
+                        {
+                            let mut renderer_guard = self.shader_renderer.lock();
+                            // SAFETY: Destroying old shader resources with valid context.
+                            // Resources were created with the same context.
+                            renderer_guard.destroy(&self.gl);
+                            *renderer_guard = new_renderer;
+                        } // Drop the lock before calling merge_uniforms
+                        
+                        *self.shader_error.lock() = None;
+                        
+                        // Merge new uniforms with existing ones, preserving values where possible
+                        self.merge_uniforms(new_uniforms);
+                        
+                        self.last_reload = Instant::now();
+                        log::info!("Shader reloaded successfully!");
+                    }
+                    Err(e) => {
+                        *self.shader_error.lock() = Some(e.clone());
+                        log::error!("Shader compilation failed: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                let error_message = format!("Failed to read shader file: {}", e);
+                *self.shader_error.lock() = Some(error_message);
+            }
+        }
+    }
+
+    fn merge_uniforms(&mut self, new_uniforms: HashMap<String, UniformInfo>) {
+        let mut merged = HashMap::new();
+        
+        for (name, new_info) in new_uniforms {
+            // If uniform existed before and types match, keep the old value
+            if let Some(old_info) = self.uniforms.get(&name) {
+                if old_info.uniform_type == new_info.uniform_type {
+                    merged.insert(name, old_info.clone());
+                    continue;
+                }
+            }
+            // Otherwise use the new uniform with default value
+            merged.insert(name, new_info);
+        }
+        
+        self.uniforms = merged;
     }
 }
 
 impl eframe::App for ShaderApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // --- NEW ---
-        // Check for hot-reload messages.
-        // We use a small timeout to avoid blocking the UI thread unnecessarily.
-        if self.shader_update_receiver.recv_timeout(Duration::from_millis(1)).is_ok() {
-            log::info!("Shader file changed, attempting to reload...");
-            match std::fs::read_to_string("shaders/shader.frag") {
-                Ok(new_source) => {
-                    match ShaderRenderer::new(&self.gl, &new_source) {
-                        Ok(new_renderer) => {
-                            let mut renderer_guard = self.shader_renderer.lock();
-                            renderer_guard.destroy(&self.gl); // Clean up the old shader
-                            *renderer_guard = new_renderer; // Replace with the new one
-                            *self.shader_error.lock() = None; // Clear any previous error
-                            log::info!("Shader reloaded successfully!");
-                        }
-                        Err(e) => {
-                            *self.shader_error.lock() = Some(e.clone());
-                            log::error!("Shader compilation failed: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    let error_message = format!("Failed to read shader file: {}", e);
-                    *self.shader_error.lock() = Some(error_message);
-                }
-            }
+        // Check for hot-reload messages with minimal blocking
+        if self.shader_update_receiver
+            .recv_timeout(Duration::from_millis(FILE_CHECK_TIMEOUT_MS))
+            .is_ok()
+        {
+            self.try_reload_shader();
         }
 
+        // --- UI controls now go in a SidePanel on the right ---
+        egui::SidePanel::right("controls_panel")
+            .default_width(250.0) 
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.heading("Controls");
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Shader:");
+                    ui.label(
+                        egui::RichText::new(
+                            self.current_shader_path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown"),
+                        )
+                        .family(egui::FontFamily::Monospace),
+                    );
+
+                    if ui.button("Open").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("GLSL Fragment Shader", &["frag", "glsl"])
+                            .set_directory(
+                                self.current_shader_path.parent().unwrap_or(Path::new(".")),
+                            )
+                            .pick_file()
+                        {
+                            self.load_shader_file(path);
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.auto_time, "Auto Time");
+                    if !self.auto_time {
+                        ui.add(egui::Slider::new(&mut self.time, 0.0..=100.0).text("Time"));
+                    }
+                    if ui.button("Reset").clicked() {
+                        self.time = 0.0;
+                    }
+                });
+
+                ui.separator();
+
+                // Display detected uniforms with controls
+                if !self.uniforms.is_empty() {
+                    ui.label(egui::RichText::new("Uniforms:").strong());
+
+                    let mut uniform_names: Vec<_> = self.uniforms.keys().cloned().collect();
+                    uniform_names.sort();
+
+                    for name in uniform_names {
+                        if let Some(uniform) = self.uniforms.get_mut(&name) {
+                            if name == "u_resolution" || name == "u_time" {
+                                continue;
+                            }
+
+                            ui.vertical(|ui| {
+                                ui.label(&name);
+                                match &mut uniform.value {
+                                    UniformValue::Float(val) => {
+                                        ui.add(egui::Slider::new(val, 0.0..=1.0));
+                                    }
+                                    UniformValue::Vec2(vals) => {
+                                        ui.add(egui::Slider::new(&mut vals[0], 0.0..=1.0).text("x"));
+                                        ui.add(egui::Slider::new(&mut vals[1], 0.0..=1.0).text("y"));
+                                    }
+                                    UniformValue::Vec3(vals) => {
+                                        ui.add(egui::Slider::new(&mut vals[0], 0.0..=1.0).text("r"));
+                                        ui.add(egui::Slider::new(&mut vals[1], 0.0..=1.0).text("g"));
+                                        ui.add(egui::Slider::new(&mut vals[2], 0.0..=1.0).text("b"));
+                                    }
+                                    UniformValue::Vec4(vals) => {
+                                        ui.add(egui::Slider::new(&mut vals[0], 0.0..=1.0).text("r"));
+                                        ui.add(egui::Slider::new(&mut vals[1], 0.0..=1.0).text("g"));
+                                        ui.add(egui::Slider::new(&mut vals[2], 0.0..=1.0).text("b"));
+                                        ui.add(egui::Slider::new(&mut vals[3], 0.0..=1.0).text("a"));
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    ui.separator();
+                }
+
+                // Display compilation errors with proper formatting
+                let error_text = self.shader_error.lock().clone();
+                if let Some(error) = error_text {
+                    egui::ScrollArea::vertical()
+                        .max_height(150.0)
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new("Shader Compilation Error:")
+                                    .color(egui::Color32::RED)
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new(error)
+                                    .color(egui::Color32::LIGHT_RED)
+                                    .family(egui::FontFamily::Monospace),
+                            );
+                        });
+                    ui.separator();
+                }
+            });
+
+        // --- The CentralPanel is now just for the shader view ---
+        // It will automatically fill the space left by the SidePanel.
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("GLSL Fragment Shader with egui");
-            ui.add(egui::Slider::new(&mut self.time, 0.0..=10.0).text("Time (u_time)"));
-
-            // --- NEW ---
-            // Display compilation errors in the UI if they exist.
-            let error_text = self.shader_error.lock().clone();
-            if let Some(error) = error_text {
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP).with_main_wrap(true), |ui| {
-    // Adding this makes sure the error text doesn't overflow the window
-    ui.style_mut().wrap = Some(true); 
-    ui.label(egui::RichText::new(error).color(egui::Color32::RED));
-});
-            }
-
             egui::Frame::canvas(ui.style()).show(ui, |ui| {
                 self.custom_painting(ui);
             });
         });
+
         ctx.request_repaint();
     }
-
+    
+    // on_exit remains the same
     fn on_exit(&mut self, gl: Option<&glow::Context>) {
         if let Some(gl) = gl {
             self.shader_renderer.lock().destroy(gl);
@@ -122,13 +366,16 @@ impl ShaderApp {
     fn custom_painting(&mut self, ui: &mut egui::Ui) {
         let (rect, _response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
 
-        self.time += ui.input(|i| i.stable_dt);
+        if self.auto_time {
+            self.time += ui.input(|i| i.stable_dt);
+        }
         let time = self.time;
         
         let shader_renderer = self.shader_renderer.clone();
+        let uniforms = self.uniforms.clone();
 
         let cb = egui_glow::CallbackFn::new(move |_info, painter| {
-            shader_renderer.lock().paint(painter.gl(), time, rect.size());
+            shader_renderer.lock().paint(painter.gl(), time, rect.size(), &uniforms);
         });
 
         let callback = egui::PaintCallback {
@@ -144,30 +391,35 @@ struct ShaderRenderer {
     vertex_array: glow::VertexArray,
 }
 
-// --- MODIFIED ---
-// The `new` function is now fallible and returns a Result<Self, String>
-// to allow for graceful error handling on compilation failure.
 impl ShaderRenderer {
     fn new(gl: &glow::Context, fragment_shader_source: &str) -> Result<Self, String> {
         use glow::HasContext as _;
 
         let shader_version = egui_glow::ShaderVersion::get(gl);
 
+        // SAFETY: All OpenGL calls are made with a valid context.
+        // Error handling ensures resources are cleaned up on failure.
         unsafe {
             let program = gl.create_program().map_err(|e| e.to_string())?;
 
-            let (vertex_shader_source, fragment_shader_source) = (
-                r#"
-                    const vec2 verts[4] = vec2[4](
-                        vec2(-1.0, 1.0), vec2(-1.0, -1.0),
-                        vec2(1.0, 1.0),  vec2(1.0, -1.0)
-                    );
-                    void main() {
-                        gl_Position = vec4(verts[gl_VertexID], 0.0, 1.0);
-                    }
-                "#,
-                fragment_shader_source,
-            );
+            let vertex_shader_source = r#"
+                out vec2 v_uv;
+                
+                const vec2 verts[4] = vec2[4](
+                    vec2(-1.0, -1.0), vec2(1.0, -1.0),
+                    vec2(-1.0, 1.0),  vec2(1.0, 1.0)
+                );
+                
+                const vec2 uvs[4] = vec2[4](
+                    vec2(0.0, 0.0), vec2(1.0, 0.0),
+                    vec2(0.0, 1.0), vec2(1.0, 1.0)
+                );
+                
+                void main() {
+                    v_uv = uvs[gl_VertexID];
+                    gl_Position = vec4(verts[gl_VertexID], 0.0, 1.0);
+                }
+            "#;
 
             let shader_sources = [
                 (glow::VERTEX_SHADER, vertex_shader_source),
@@ -190,8 +442,13 @@ impl ShaderRenderer {
 
                 if !gl.get_shader_compile_status(shader) {
                     let info_log = gl.get_shader_info_log(shader);
-                    // Important: clean up the failed shader
                     gl.delete_shader(shader);
+                    // Clean up program and any previously compiled shaders
+                    for prev_shader in shaders {
+                        gl.detach_shader(program, prev_shader);
+                        gl.delete_shader(prev_shader);
+                    }
+                    gl.delete_program(program);
                     return Err(info_log);
                 }
                 
@@ -202,7 +459,6 @@ impl ShaderRenderer {
             gl.link_program(program);
             if !gl.get_program_link_status(program) {
                 let info_log = gl.get_program_info_log(program);
-                // Important: clean up all the shaders
                 for shader in shaders {
                     gl.detach_shader(program, shader);
                     gl.delete_shader(shader);
@@ -211,6 +467,7 @@ impl ShaderRenderer {
                 return Err(info_log);
             }
 
+            // Clean up shader objects after successful linking
             for shader in shaders {
                 gl.detach_shader(program, shader);
                 gl.delete_shader(shader);
@@ -224,35 +481,106 @@ impl ShaderRenderer {
 
     fn destroy(&self, gl: &glow::Context) {
         use glow::HasContext as _;
+        // SAFETY: Deleting resources that were created with the same context.
+        // This is called during cleanup when the context is still valid.
         unsafe {
             gl.delete_program(self.program);
             gl.delete_vertex_array(self.vertex_array);
         }
     }
 
-    fn paint(&self, gl: &glow::Context, time: f32, size: egui::Vec2) {
+    fn paint(&self, gl: &glow::Context, time: f32, size: egui::Vec2, uniforms: &HashMap<String, UniformInfo>) {
         use glow::HasContext as _;
+        // SAFETY: Rendering with a valid OpenGL context and program.
+        // All uniform locations are queried before use.
         unsafe {
             gl.use_program(Some(self.program));
-            gl.uniform_1_f32(gl.get_uniform_location(self.program, "u_time").as_ref(), time);
-            gl.uniform_2_f32(gl.get_uniform_location(self.program, "u_resolution").as_ref(), size.x, size.y);
+            
+            // Set built-in uniforms
+            if let Some(loc) = gl.get_uniform_location(self.program, "u_time") {
+                gl.uniform_1_f32(Some(&loc), time);
+            }
+            if let Some(loc) = gl.get_uniform_location(self.program, "u_resolution") {
+                gl.uniform_2_f32(Some(&loc), size.x, size.y);
+            }
+            
+            // Set custom uniforms
+            for (name, uniform_info) in uniforms {
+                if name == "u_resolution" || name == "u_time" {
+                    continue;
+                }
+                if let Some(loc) = gl.get_uniform_location(self.program, name) {
+                    match &uniform_info.value {
+                        UniformValue::Float(val) => {
+                            gl.uniform_1_f32(Some(&loc), *val);
+                        }
+                        UniformValue::Vec2(vals) => {
+                            gl.uniform_2_f32(Some(&loc), vals[0], vals[1]);
+                        }
+                        UniformValue::Vec3(vals) => {
+                            gl.uniform_3_f32(Some(&loc), vals[0], vals[1], vals[2]);
+                        }
+                        UniformValue::Vec4(vals) => {
+                            gl.uniform_4_f32(Some(&loc), vals[0], vals[1], vals[2], vals[3]);
+                        }
+                    }
+                }
+            }
+            
             gl.bind_vertex_array(Some(self.vertex_array));
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
         }
     }
 }
 
+/// Parse GLSL shader source to detect uniform declarations
+fn parse_uniforms(shader_source: &str) -> HashMap<String, UniformInfo> {
+    use regex::Regex;
+    
+    let mut uniforms = HashMap::new();
+    
+    // Regex to match: uniform <type> <name>;
+    let re = Regex::new(r"uniform\s+(float|vec2|vec3|vec4)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;")
+        .expect("Invalid regex pattern");
+    
+    for cap in re.captures_iter(shader_source) {
+        let type_str = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+        
+        let uniform_type = match type_str {
+            "float" => UniformType::Float,
+            "vec2" => UniformType::Vec2,
+            "vec3" => UniformType::Vec3,
+            "vec4" => UniformType::Vec4,
+            _ => continue,
+        };
+        
+        let value = UniformValue::default_for_type(&uniform_type);
+        
+        uniforms.insert(
+            name.to_string(),
+            UniformInfo {
+                name: name.to_string(),
+                uniform_type,
+                value,
+            }
+        );
+    }
+    
+    uniforms
+}
+
 fn main() {
-    // We need to enable logging to see the hot-reload messages.
-    env_logger::init(); 
+    env_logger::init();
 
     let native_options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
+        always_on_top: true,
         ..Default::default()
     };
-    
+
     eframe::run_native(
-        "egui with GLSL Shaders",
+        "Shader Editor",
         native_options,
         Box::new(|cc| Box::new(ShaderApp::new(cc).expect("Failed to create ShaderApp"))),
     ).expect("Failed to run eframe");
