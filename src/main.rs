@@ -13,10 +13,25 @@ const DEFAULT_SHADER_PATH: &str = "shaders/shader.frag";
 const RELOAD_DEBOUNCE_MS: u64 = 100;
 const FILE_CHECK_TIMEOUT_MS: u64 = 1;
 
+/// Get the default shader path relative to the executable
+fn get_default_shader_path() -> PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let shader_path = exe_dir.join(DEFAULT_SHADER_PATH);
+            if shader_path.exists() {
+                return shader_path;
+            }
+        }
+    }
+    
+    // Fallback to current working directory
+    PathBuf::from(DEFAULT_SHADER_PATH)
+}
+
 /// Represents a detected uniform and its metadata
 #[derive(Debug, Clone)]
 pub struct UniformInfo {
-    name: String,
+    _name: String,
     uniform_type: UniformType,
     value: UniformValue,
 }
@@ -59,13 +74,14 @@ pub struct ShaderApp {
     last_reload: Instant,
     uniforms: HashMap<String, UniformInfo>,
     current_shader_path: PathBuf,
+    export_resolution: [u32; 2],
 }
 
 impl ShaderApp {
     pub fn new<'a>(cc: &'a eframe::CreationContext<'a>) -> Option<Self> {
         let gl = cc.gl.as_ref()?.clone();
 
-        let shader_path = PathBuf::from(DEFAULT_SHADER_PATH);
+        let shader_path = get_default_shader_path();
 
         // SAFETY: Reading shader file during initialization.
         // If the file is missing, we fail fast with a clear error message.
@@ -97,6 +113,7 @@ impl ShaderApp {
             last_reload: Instant::now(),
             uniforms: detected_uniforms,
             current_shader_path: shader_path,
+            export_resolution: [1920, 1080],
         })
     }
 
@@ -222,6 +239,127 @@ impl ShaderApp {
         
         self.uniforms = merged;
     }
+
+    fn export_image(&self) {
+        let width = self.export_resolution[0];
+        let height = self.export_resolution[1];
+        
+        log::info!("Exporting image at {}x{}", width, height);
+        
+        // SAFETY: Creating framebuffer and texture for offscreen rendering
+        // with valid OpenGL context
+        unsafe {
+            use glow::HasContext as _;
+            let gl = &*self.gl;
+            
+            // Create framebuffer
+            let fbo = match gl.create_framebuffer() {
+                Ok(fbo) => fbo,
+                Err(e) => {
+                    log::error!("Failed to create framebuffer: {}", e);
+                    return;
+                }
+            };
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            
+            // Create texture
+            let texture = match gl.create_texture() {
+                Ok(tex) => tex,
+                Err(e) => {
+                    log::error!("Failed to create texture: {}", e);
+                    gl.delete_framebuffer(fbo);
+                    return;
+                }
+            };
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                None,
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            
+            // Attach texture to framebuffer
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(texture),
+                0,
+            );
+            
+            // Check framebuffer status
+            if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
+                log::error!("Framebuffer is not complete");
+                gl.delete_texture(texture);
+                gl.delete_framebuffer(fbo);
+                return;
+            }
+            
+            // Set viewport and clear
+            gl.viewport(0, 0, width as i32, height as i32);
+            gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
+            
+            // Render shader
+            let size = egui::Vec2::new(width as f32, height as f32);
+            self.shader_renderer.lock().paint(gl, self.time, size, &self.uniforms);
+            
+            // Read pixels
+            let mut pixels = vec![0u8; (width * height * 4) as usize];
+            gl.read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut pixels),
+            );
+            
+            // Cleanup
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.delete_texture(texture);
+            gl.delete_framebuffer(fbo);
+            
+            // Save image in a separate thread to avoid blocking
+            std::thread::spawn(move || {
+                // Flip image vertically (OpenGL reads bottom-to-top)
+                let mut flipped = vec![0u8; pixels.len()];
+                for y in 0..height {
+                    let src_row = &pixels[(y * width * 4) as usize..((y + 1) * width * 4) as usize];
+                    let dst_y = height - 1 - y;
+                    let dst_row = &mut flipped[(dst_y * width * 4) as usize..((dst_y + 1) * width * 4) as usize];
+                    dst_row.copy_from_slice(src_row);
+                }
+                
+                // Save with file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("PNG Image", &["png"])
+                    .set_file_name("shader_export.png")
+                    .save_file()
+                {
+                    match image::save_buffer(
+                        &path,
+                        &flipped,
+                        width,
+                        height,
+                        image::ColorType::Rgba8,
+                    ) {
+                        Ok(_) => log::info!("Image exported successfully to {:?}", path),
+                        Err(e) => log::error!("Failed to save image: {}", e),
+                    }
+                }
+            });
+        }
+    }
 }
 
 impl eframe::App for ShaderApp {
@@ -278,6 +416,25 @@ impl eframe::App for ShaderApp {
                         self.time = 0.0;
                     }
                 });
+
+                ui.separator();
+
+                // Export section
+                ui.label(egui::RichText::new("Export:").strong());
+                ui.horizontal(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Width:");
+                        ui.add(egui::DragValue::new(&mut self.export_resolution[0]).speed(10).clamp_range(1..=8192));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Height:");
+                        ui.add(egui::DragValue::new(&mut self.export_resolution[1]).speed(10).clamp_range(1..=8192));
+                    });
+                });
+                ui.add_space(8.0);
+                if ui.button("Export Image").clicked() {
+                    self.export_image();
+                }
 
                 ui.separator();
 
@@ -560,7 +717,7 @@ fn parse_uniforms(shader_source: &str) -> HashMap<String, UniformInfo> {
         uniforms.insert(
             name.to_string(),
             UniformInfo {
-                name: name.to_string(),
+                _name: name.to_string(),
                 uniform_type,
                 value,
             }
