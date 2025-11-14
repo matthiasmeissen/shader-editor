@@ -14,7 +14,7 @@ void main() {
     vec2 p = uv - 0.5;
     p.x *= u_resolution.x / u_resolution.y;
 
-    float d = length(p);
+    float d = length(p + sin(u_time));
 
     vec3 col = vec3(d);
 

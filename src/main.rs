@@ -1,7 +1,29 @@
+// Cargo.toml
+/*
+[package]
+name = "shader-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.23.0"
+egui = "0.23.0"
+egui_glow = "0.23.0"
+env_logger = "0.11.8"
+glow = "0.12.0"
+log = "0.4.17"
+notify = "6.1.1"
+regex = "1.10"
+rfd = "0.12"
+image = "0.24"
+*/
+
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::io::Write;
 
 use eframe::egui_glow;
 use egui::mutex::Mutex;
@@ -26,6 +48,15 @@ fn get_default_shader_path() -> PathBuf {
     
     // Fallback to current working directory
     PathBuf::from(DEFAULT_SHADER_PATH)
+}
+
+/// Check if FFmpeg is available on the system
+fn is_ffmpeg_available() -> bool {
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 /// Represents a detected uniform and its metadata
@@ -75,6 +106,17 @@ pub struct ShaderApp {
     uniforms: HashMap<String, UniformInfo>,
     current_shader_path: PathBuf,
     export_resolution: [u32; 2],
+    video_duration_frames: u32,
+    video_fps: u32,
+    ffmpeg_available: bool,
+    export_progress: Arc<Mutex<Option<ExportProgress>>>,
+}
+
+#[derive(Debug, Clone)]
+struct ExportProgress {
+    current_frame: u32,
+    total_frames: u32,
+    status: String,
 }
 
 impl ShaderApp {
@@ -102,6 +144,13 @@ impl ShaderApp {
 
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
+        let ffmpeg_available = is_ffmpeg_available();
+        if ffmpeg_available {
+            log::info!("FFmpeg detected and available for video export");
+        } else {
+            log::warn!("FFmpeg not found - video export will save PNG sequence only");
+        }
+
         Some(Self {
             gl,
             shader_renderer: Arc::new(Mutex::new(shader_renderer)),
@@ -114,6 +163,10 @@ impl ShaderApp {
             uniforms: detected_uniforms,
             current_shader_path: shader_path,
             export_resolution: [1920, 1080],
+            video_duration_frames: 300,
+            video_fps: 60,
+            ffmpeg_available,
+            export_progress: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -360,6 +413,227 @@ impl ShaderApp {
             });
         }
     }
+
+    fn render_frame_to_buffer(&self, time: f32, width: u32, height: u32) -> Option<Vec<u8>> {
+        // SAFETY: Creating framebuffer and texture for offscreen rendering
+        unsafe {
+            use glow::HasContext as _;
+            let gl = &*self.gl;
+            
+            // Create framebuffer
+            let fbo = gl.create_framebuffer().ok()?;
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            
+            // Create texture
+            let texture = gl.create_texture().ok()?;
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA as i32,
+                width as i32,
+                height as i32,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                None,
+            );
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            
+            // Attach texture to framebuffer
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(texture),
+                0,
+            );
+            
+            // Check framebuffer status
+            if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
+                log::error!("Framebuffer is not complete");
+                gl.delete_texture(texture);
+                gl.delete_framebuffer(fbo);
+                return None;
+            }
+            
+            // Set viewport and clear
+            gl.viewport(0, 0, width as i32, height as i32);
+            gl.clear_color(0.0, 0.0, 0.0, 1.0);
+            gl.clear(glow::COLOR_BUFFER_BIT);
+            
+            // Render shader
+            let size = egui::Vec2::new(width as f32, height as f32);
+            self.shader_renderer.lock().paint(gl, time, size, &self.uniforms);
+            
+            // Read pixels
+            let mut pixels = vec![0u8; (width * height * 4) as usize];
+            gl.read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut pixels),
+            );
+            
+            // Cleanup
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.delete_texture(texture);
+            gl.delete_framebuffer(fbo);
+            
+            // Flip image vertically (OpenGL reads bottom-to-top)
+            let mut flipped = vec![0u8; pixels.len()];
+            for y in 0..height {
+                let src_row = &pixels[(y * width * 4) as usize..((y + 1) * width * 4) as usize];
+                let dst_y = height - 1 - y;
+                let dst_row = &mut flipped[(dst_y * width * 4) as usize..((dst_y + 1) * width * 4) as usize];
+                dst_row.copy_from_slice(src_row);
+            }
+            
+            Some(flipped)
+        }
+    }
+
+    fn export_video(&mut self) {
+        let width = self.export_resolution[0];
+        let height = self.export_resolution[1];
+        let total_frames = self.video_duration_frames;
+        let fps = self.video_fps;
+        
+        log::info!("Starting video export: {}x{} @ {}fps, {} frames", 
+                   width, height, fps, total_frames);
+        
+        // Ask user for output file first
+        let output_path = match rfd::FileDialog::new()
+            .add_filter("MP4 Video", &["mp4"])
+            .set_file_name("shader_export.mp4")
+            .save_file()
+        {
+            Some(path) => path,
+            None => {
+                log::info!("Export cancelled");
+                return;
+            }
+        };
+        
+        if !self.ffmpeg_available {
+            log::error!("FFmpeg not available");
+            *self.export_progress.lock() = Some(ExportProgress {
+                current_frame: 0,
+                total_frames,
+                status: "FFmpeg not available!".to_string(),
+            });
+            return;
+        }
+        
+        // Start FFmpeg process with stdin pipe
+        let mut ffmpeg_child = match Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f", "rawvideo",
+                "-pixel_format", "rgba",
+                "-video_size", &format!("{}x{}", width, height),
+                "-framerate", &fps.to_string(),
+                "-i", "pipe:0",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                output_path.to_str().unwrap(),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) => {
+                log::error!("Failed to start FFmpeg: {}", e);
+                *self.export_progress.lock() = Some(ExportProgress {
+                    current_frame: 0,
+                    total_frames,
+                    status: format!("Failed to start FFmpeg: {}", e),
+                });
+                return;
+            }
+        };
+        
+        let mut stdin = ffmpeg_child.stdin.take().unwrap();
+        
+        // Update progress
+        *self.export_progress.lock() = Some(ExportProgress {
+            current_frame: 0,
+            total_frames,
+            status: "Rendering and encoding...".to_string(),
+        });
+        
+        // Render frames and stream directly to FFmpeg
+        for frame in 0..total_frames {
+            let time = frame as f32 / fps as f32;
+            
+            // Update progress every 10 frames to reduce overhead
+            if frame % 10 == 0 {
+                *self.export_progress.lock() = Some(ExportProgress {
+                    current_frame: frame,
+                    total_frames,
+                    status: format!("Encoding frame {}/{}", frame + 1, total_frames),
+                });
+            }
+            
+            // Render frame
+            if let Some(pixels) = self.render_frame_to_buffer(time, width, height) {
+                // Write raw RGBA data directly to FFmpeg stdin
+                if let Err(e) = stdin.write_all(&pixels) {
+                    log::error!("Failed to write frame {}: {}", frame, e);
+                    *self.export_progress.lock() = None;
+                    return;
+                }
+            } else {
+                log::error!("Failed to render frame {}", frame);
+                *self.export_progress.lock() = None;
+                return;
+            }
+        }
+        
+        // Close stdin and wait for FFmpeg to finish
+        drop(stdin);
+        
+        match ffmpeg_child.wait() {
+            Ok(status) if status.success() => {
+                log::info!("Video exported successfully to {:?}", output_path);
+                *self.export_progress.lock() = Some(ExportProgress {
+                    current_frame: total_frames,
+                    total_frames,
+                    status: "Export complete!".to_string(),
+                });
+            }
+            Ok(status) => {
+                log::error!("FFmpeg failed with status: {}", status);
+                *self.export_progress.lock() = Some(ExportProgress {
+                    current_frame: total_frames,
+                    total_frames,
+                    status: "FFmpeg encoding failed!".to_string(),
+                });
+            }
+            Err(e) => {
+                log::error!("Failed to wait for FFmpeg: {}", e);
+                *self.export_progress.lock() = Some(ExportProgress {
+                    current_frame: total_frames,
+                    total_frames,
+                    status: format!("FFmpeg error: {}", e),
+                });
+            }
+        }
+        
+        // Clear progress after a delay
+        let progress = self.export_progress.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(3));
+            *progress.lock() = None;
+        });
+    }
 }
 
 impl eframe::App for ShaderApp {
@@ -422,18 +696,50 @@ impl eframe::App for ShaderApp {
                 // Export section
                 ui.label(egui::RichText::new("Export:").strong());
                 ui.horizontal(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Width:");
-                        ui.add(egui::DragValue::new(&mut self.export_resolution[0]).speed(10).clamp_range(1..=8192));
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Height:");
-                        ui.add(egui::DragValue::new(&mut self.export_resolution[1]).speed(10).clamp_range(1..=8192));
-                    });
+                    ui.label("Width:");
+                    ui.add(egui::DragValue::new(&mut self.export_resolution[0]).speed(10).clamp_range(1..=8192));
                 });
-                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("Height:");
+                    ui.add(egui::DragValue::new(&mut self.export_resolution[1]).speed(10).clamp_range(1..=8192));
+                });
+                ui.add_space(4.0);
                 if ui.button("Export Image").clicked() {
                     self.export_image();
+                }
+
+                ui.add_space(8.0);
+
+                // Video export section
+                ui.label(egui::RichText::new("Video Export:").strong());
+                if !self.ffmpeg_available {
+                    ui.label(egui::RichText::new("⚠ FFmpeg not found").color(egui::Color32::YELLOW).small());
+                    ui.label(egui::RichText::new("(frames will be saved)").small());
+                }
+                
+                ui.horizontal(|ui| {
+                    ui.label("Frames:");
+                    ui.add(egui::DragValue::new(&mut self.video_duration_frames).speed(10).clamp_range(1..=10000));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("FPS:");
+                    ui.add(egui::DragValue::new(&mut self.video_fps).speed(1).clamp_range(1..=120));
+                });
+                ui.label(egui::RichText::new(
+                    format!("Duration: {:.2}s", self.video_duration_frames as f32 / self.video_fps as f32)
+                ).small());
+                
+                // Show progress or export button
+                if let Some(progress) = self.export_progress.lock().clone() {
+                    ui.add_space(4.0);
+                    let progress_fraction = progress.current_frame as f32 / progress.total_frames as f32;
+                    ui.add(egui::ProgressBar::new(progress_fraction)
+                        .text(&progress.status));
+                } else {
+                    ui.add_space(4.0);
+                    if ui.button("Export Video").clicked() {
+                        self.export_video();
+                    }
                 }
 
                 ui.separator();
