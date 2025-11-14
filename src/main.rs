@@ -1,23 +1,3 @@
-// Cargo.toml
-/*
-[package]
-name = "shader-app"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-eframe = "0.23.0"
-egui = "0.23.0"
-egui_glow = "0.23.0"
-env_logger = "0.11.8"
-glow = "0.12.0"
-log = "0.4.17"
-notify = "6.1.1"
-regex = "1.10"
-rfd = "0.12"
-image = "0.24"
-*/
-
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
