@@ -1,5 +1,6 @@
 use crate::app::ShaderApp;
 use super::data::*;
+use super::file_io;
 use crate::FILE_CHECK_TIMEOUT_MS;
 
 use std::time::Duration;
@@ -146,6 +147,45 @@ impl eframe::App for ShaderApp {
                                         ui.add(egui::Slider::new(&mut vals[1], 0.0..=1.0).text("g"));
                                         ui.add(egui::Slider::new(&mut vals[2], 0.0..=1.0).text("b"));
                                         ui.add(egui::Slider::new(&mut vals[3], 0.0..=1.0).text("a"));
+                                    }
+                                    UniformValue::Sampler2D(texture_handle) => {
+                                        if let Some(handle) = texture_handle {
+                                            ui.label(format!("📷 {}", 
+                                                handle.path.file_name()
+                                                    .and_then(|n| n.to_str())
+                                                    .unwrap_or("texture")));
+                                            ui.label(egui::RichText::new(
+                                                format!("{}x{}", handle.width, handle.height)
+                                            ).small());
+                                        } else {
+                                            ui.label(egui::RichText::new("No texture loaded").small());
+                                        }
+                                        
+                                        if ui.button("Load Texture...").clicked() {
+                                            if let Some(path) = rfd::FileDialog::new()
+                                                .add_filter("Image", &["png", "jpg", "jpeg", "bmp"])
+                                                .pick_file()
+                                            {
+                                                // Load texture
+                                                match file_io::load_texture_from_file(&self.gl, &path) {
+                                                    Ok(new_texture) => {
+                                                        // Delete old texture if exists
+                                                        if let Some(old_handle) = texture_handle.as_ref() {
+                                                            if let Some(old_tex) = old_handle.texture_id {
+                                                                file_io::delete_texture(&self.gl, old_tex);
+                                                            }
+                                                        }
+
+                                                        *texture_handle = Some(new_texture.clone());
+                                                        log::info!("Texture loaded: {}x{}",
+                                                            new_texture.width, new_texture.height);
+                                                    }
+                                                    Err(e) => {
+                                                        log::error!("Failed to load texture: {}", e);
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             });

@@ -1,9 +1,110 @@
 use crate::app::ShaderApp;
-use super::data::ExportProgress;
+use super::data::{ExportProgress, TextureHandle};
 
+use std::path::Path;
 use std::process::Command;
 use std::io::Write;
 use std::time::Duration;
+use glow::HasContext;
+
+// ==========================================
+// TEXTURE LOADING
+// ==========================================
+
+pub fn load_texture_from_file(
+    gl: &glow::Context,
+    path: &Path,
+) -> Result<TextureHandle, String> {
+    // Load image
+    let img = image::open(path)
+        .map_err(|e| format!("Failed to load image: {}", e))?
+        .to_rgba8();
+    
+    let (width, height) = img.dimensions();
+    
+    // ← FIX: Flip image vertically (OpenGL expects bottom-left origin)
+    let flipped = flip_image_vertically(&img, width, height);
+    
+    unsafe {
+        let texture = gl.create_texture()
+            .map_err(|e| format!("Failed to create texture: {}", e))?;
+        
+        gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+        
+        // Upload flipped texture data
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA as i32,
+            width as i32,
+            height as i32,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            Some(&flipped),  // ← Use flipped data
+        );
+        
+        // Set texture parameters
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_S,
+            glow::REPEAT as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_WRAP_T,
+            glow::REPEAT as i32,
+        );
+        
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        
+        Ok(TextureHandle {
+            path: path.to_path_buf(),
+            texture_id: Some(texture),
+            width,
+            height,
+        })
+    }
+}
+
+/// Flip image vertically (OpenGL expects bottom-left origin, images are top-left)
+fn flip_image_vertically(img: &image::RgbaImage, width: u32, height: u32) -> Vec<u8> {
+    let data = img.as_raw();
+    let mut flipped = vec![0u8; data.len()];
+    let row_size = (width * 4) as usize;  // 4 bytes per pixel (RGBA)
+    
+    for y in 0..height {
+        let src_row_start = (y * width * 4) as usize;
+        let src_row_end = src_row_start + row_size;
+        let src_row = &data[src_row_start..src_row_end];
+        
+        // Flip: bottom row becomes top row
+        let dst_y = height - 1 - y;
+        let dst_row_start = (dst_y * width * 4) as usize;
+        let dst_row_end = dst_row_start + row_size;
+        let dst_row = &mut flipped[dst_row_start..dst_row_end];
+        
+        dst_row.copy_from_slice(src_row);
+    }
+    
+    flipped
+}
+
+pub fn delete_texture(gl: &glow::Context, texture: glow::Texture) {
+    unsafe {
+        gl.delete_texture(texture);
+    }
+}
 
 impl ShaderApp {
     pub fn export_image(&self) {
@@ -347,4 +448,19 @@ impl ShaderApp {
             *progress.lock() = None;
         });
     }
+}
+
+/// Helper for flipping raw pixel data (used by export functions)
+fn flip_image_vertically_raw(data: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let mut flipped = vec![0u8; data.len()];
+    let row_size = (width * 4) as usize;
+    
+    for y in 0..height {
+        let src_row = &data[(y * width * 4) as usize..((y + 1) * width * 4) as usize];
+        let dst_y = height - 1 - y;
+        let dst_row = &mut flipped[(dst_y * width * 4) as usize..((dst_y + 1) * width * 4) as usize];
+        dst_row.copy_from_slice(src_row);
+    }
+    
+    flipped
 }

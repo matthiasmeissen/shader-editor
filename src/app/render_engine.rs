@@ -119,6 +119,8 @@ impl ShaderRenderer {
             if let Some(loc) = gl.get_uniform_location(self.program, "u_resolution") {
                 gl.uniform_2_f32(Some(&loc), size.x, size.y);
             }
+
+            let mut texture_unit = 0;
             
             // Set custom uniforms
             for (name, uniform_info) in uniforms {
@@ -138,6 +140,20 @@ impl ShaderRenderer {
                         }
                         UniformValue::Vec4(vals) => {
                             gl.uniform_4_f32(Some(&loc), vals[0], vals[1], vals[2], vals[3]);
+                        }
+                        UniformValue::Sampler2D(texture_handle) => {
+                            if let Some(handle) = texture_handle {
+                                if let Some(texture_id) = handle.texture_id {
+                                    // Activate texture unit
+                                    gl.active_texture(glow::TEXTURE0 + texture_unit);
+                                    gl.bind_texture(glow::TEXTURE_2D, Some(texture_id));
+                                    
+                                    // Set uniform to texture unit
+                                    gl.uniform_1_i32(Some(&loc), texture_unit as i32);
+                                    
+                                    texture_unit += 1;
+                                }
+                            }
                         }
                     }
                 }

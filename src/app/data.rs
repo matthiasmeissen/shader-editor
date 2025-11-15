@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 #[derive(Debug, Clone)]
 pub struct UniformInfo {
     pub _name: String,
@@ -11,6 +13,7 @@ pub enum UniformType {
     Vec2,
     Vec3,
     Vec4,
+    Sampler2D,
 }
 
 #[derive(Debug, Clone)]
@@ -19,6 +22,15 @@ pub enum UniformValue {
     Vec2([f32; 2]),
     Vec3([f32; 3]),
     Vec4([f32; 4]),
+    Sampler2D(Option<TextureHandle>), 
+}
+
+#[derive(Debug, Clone)]
+pub struct TextureHandle {
+    pub path: PathBuf,
+    pub texture_id: Option<glow::Texture>,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl UniformValue {
@@ -28,6 +40,7 @@ impl UniformValue {
             UniformType::Vec2 => UniformValue::Vec2([0.5, 0.5]),
             UniformType::Vec3 => UniformValue::Vec3([0.5, 0.5, 0.5]),
             UniformType::Vec4 => UniformValue::Vec4([1.0, 1.0, 1.0, 1.0]),
+            UniformType::Sampler2D => UniformValue::Sampler2D(None),
         }
     }
 }
