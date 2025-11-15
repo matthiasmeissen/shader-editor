@@ -1,8 +1,6 @@
-
+use crate::data::*;
 use std::collections::HashMap;
 use egui_glow::glow;
-
-use crate::data::*;
 
 pub struct ShaderRenderer {
     pub program: glow::Program,

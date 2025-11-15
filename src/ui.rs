@@ -1,7 +1,7 @@
-
-use crate::ShaderApp;
+use crate::app::ShaderApp;
 use crate::data::*;
 use crate::FILE_CHECK_TIMEOUT_MS;
+
 use std::time::Duration;
 use std::path::Path;
 

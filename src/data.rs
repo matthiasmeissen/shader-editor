@@ -1,4 +1,3 @@
-/// Represents a detected uniform and its metadata
 #[derive(Debug, Clone)]
 pub struct UniformInfo {
     pub _name: String,
