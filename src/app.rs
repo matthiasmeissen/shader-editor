@@ -1,8 +1,12 @@
+mod render_engine;
+mod data;
+mod export;
+mod ui;
 
-use crate::data::*;
+use data::*;
 use crate::{RELOAD_DEBOUNCE_MS, DEFAULT_SHADER_PATH};
 
-use crate::render_engine::ShaderRenderer;
+use render_engine::ShaderRenderer;
 
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc};
@@ -16,21 +20,21 @@ use egui_glow::glow;
 use notify::{RecommendedWatcher, Watcher, RecursiveMode};
 
 pub struct ShaderApp {
-    pub gl: Arc<glow::Context>,
-    pub shader_renderer: Arc<Mutex<ShaderRenderer>>,
-    pub time: f32,
-    pub auto_time: bool,
-    pub shader_error: Arc<Mutex<Option<String>>>,
-    pub watcher: Option<RecommendedWatcher>,
-    pub shader_update_receiver: mpsc::Receiver<()>,
-    pub last_reload: Instant,
-    pub uniforms: HashMap<String, UniformInfo>,
-    pub current_shader_path: PathBuf,
-    pub export_resolution: [u32; 2],
-    pub video_duration_frames: u32,
-    pub video_fps: u32,
-    pub ffmpeg_available: bool,
-    pub export_progress: Arc<Mutex<Option<ExportProgress>>>,
+    gl: Arc<glow::Context>,
+    shader_renderer: Arc<Mutex<ShaderRenderer>>,
+    time: f32,
+    auto_time: bool,
+    shader_error: Arc<Mutex<Option<String>>>,
+    watcher: Option<RecommendedWatcher>,
+    shader_update_receiver: mpsc::Receiver<()>,
+    last_reload: Instant,
+    uniforms: HashMap<String, UniformInfo>,
+    current_shader_path: PathBuf,
+    export_resolution: [u32; 2],
+    video_duration_frames: u32,
+    video_fps: u32,
+    ffmpeg_available: bool,
+    export_progress: Arc<Mutex<Option<ExportProgress>>>,
 }
 
 impl ShaderApp {

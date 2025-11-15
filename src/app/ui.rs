@@ -1,5 +1,5 @@
 use crate::app::ShaderApp;
-use crate::data::*;
+use super::data::*;
 use crate::FILE_CHECK_TIMEOUT_MS;
 
 use std::time::Duration;

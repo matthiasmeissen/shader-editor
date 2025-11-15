@@ -1,10 +1,10 @@
-use crate::data::*;
+use super::data::*;
 use std::collections::HashMap;
 use egui_glow::glow;
 
 pub struct ShaderRenderer {
-    pub program: glow::Program,
-    pub vertex_array: glow::VertexArray,
+    program: glow::Program,
+    vertex_array: glow::VertexArray,
 }
 
 impl ShaderRenderer {

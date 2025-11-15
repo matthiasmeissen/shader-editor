@@ -1,5 +1,5 @@
 use crate::app::ShaderApp;
-use crate::data::ExportProgress;
+use super::data::ExportProgress;
 
 use std::process::Command;
 use std::io::Write;

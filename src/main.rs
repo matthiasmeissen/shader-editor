@@ -1,12 +1,6 @@
-mod render_engine;
-mod data;
-mod export;
-mod ui;
 mod app;
-
 use app::ShaderApp;
 
-// Configuration constants
 pub const DEFAULT_SHADER_PATH: &str = "shaders/shader.frag";
 pub const RELOAD_DEBOUNCE_MS: u64 = 100;
 pub const FILE_CHECK_TIMEOUT_MS: u64 = 1;
