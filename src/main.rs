@@ -2,6 +2,7 @@ mod app;
 use app::ShaderApp;
 
 pub const DEFAULT_SHADER_PATH: &str = "shaders/shader.frag";
+pub const DEFAULT_POST_SHADER_PATH: &str = "shaders/post.frag";
 pub const RELOAD_DEBOUNCE_MS: u64 = 100;
 pub const FILE_CHECK_TIMEOUT_MS: u64 = 1;
 

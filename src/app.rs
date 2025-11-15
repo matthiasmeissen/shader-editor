@@ -4,7 +4,7 @@ mod file_io;
 mod ui;
 
 use data::*;
-use crate::{RELOAD_DEBOUNCE_MS, DEFAULT_SHADER_PATH, FILE_CHECK_TIMEOUT_MS};
+use crate::{RELOAD_DEBOUNCE_MS, DEFAULT_SHADER_PATH, DEFAULT_POST_SHADER_PATH, FILE_CHECK_TIMEOUT_MS};
 
 use render_engine::ShaderRenderer;
 
@@ -20,43 +20,44 @@ use egui_glow::glow;
 use notify::{RecommendedWatcher, Watcher, RecursiveMode};
 
 pub struct ShaderApp {
-    pub(crate) gl: Arc<glow::Context>,
-    pub(crate) shader_renderer: Arc<Mutex<ShaderRenderer>>,
-    pub(crate) time: f32,
-    pub(crate) auto_time: bool,
-    pub(crate) shader_error: Arc<Mutex<Option<String>>>,
-    pub(crate) watcher: Option<RecommendedWatcher>,
-    pub(crate) shader_update_receiver: mpsc::Receiver<()>,
-    pub(crate) last_reload: Instant,
-    pub(crate) uniforms: HashMap<String, UniformInfo>,
-    pub(crate) current_shader_path: PathBuf,
-    pub(crate) export_resolution: [u32; 2],
-    pub(crate) video_duration_frames: u32,
-    pub(crate) video_fps: u32,
-    pub(crate) ffmpeg_available: bool,
-    pub(crate) export_progress: Arc<Mutex<Option<ExportProgress>>>,
+    gl: Arc<glow::Context>,
+    shader_renderer: Arc<Mutex<ShaderRenderer>>,
+    time: f32,
+    auto_time: bool,
+    shader_error: Arc<Mutex<Option<String>>>,
+    watcher: Option<RecommendedWatcher>,
+    shader_update_receiver: mpsc::Receiver<()>,
+    last_reload: Instant,
+    uniforms: HashMap<String, UniformInfo>,
+    current_shader_path: PathBuf,
+    export_resolution: [u32; 2],
+    video_duration_frames: u32,
+    video_fps: u32,
+    ffmpeg_available: bool,
+    export_progress: Arc<Mutex<Option<ExportProgress>>>,
     
     // Post-processing
-    pub(crate) post_process_enabled: bool,
-    pub(crate) post_process_shader_path: Option<PathBuf>,
-    pub(crate) post_process_renderer: Option<Arc<Mutex<ShaderRenderer>>>,
-    pub(crate) post_process_uniforms: HashMap<String, UniformInfo>,
-    pub(crate) post_process_error: Arc<Mutex<Option<String>>>,
-    pub(crate) post_process_watcher: Option<RecommendedWatcher>,
-    pub(crate) post_process_update_receiver: Option<mpsc::Receiver<()>>,
-    pub(crate) post_process_last_reload: Instant,
+    post_process_enabled: bool,
+    post_process_shader_path: Option<PathBuf>,
+    post_process_renderer: Option<Arc<Mutex<ShaderRenderer>>>,
+    post_process_uniforms: HashMap<String, UniformInfo>,
+    post_process_error: Arc<Mutex<Option<String>>>,
+    post_process_watcher: Option<RecommendedWatcher>,
+    post_process_update_receiver: Option<mpsc::Receiver<()>>,
+    post_process_last_reload: Instant,
     
     // Intermediate framebuffer
-    pub(crate) intermediate_fbo: Option<glow::Framebuffer>,
-    pub(crate) intermediate_texture: Option<glow::Texture>,
-    pub(crate) intermediate_size: (u32, u32),
+    intermediate_fbo: Option<glow::Framebuffer>,
+    intermediate_texture: Option<glow::Texture>,
+    intermediate_size: (u32, u32),
 }
 
 impl ShaderApp {
     pub fn new<'a>(cc: &'a eframe::CreationContext<'a>) -> Option<Self> {
         let gl = cc.gl.as_ref()?.clone();
 
-        let shader_path = get_default_shader_path();
+        let shader_path = get_default_shader_path(DEFAULT_SHADER_PATH);
+        let post_shader_path = get_default_shader_path(DEFAULT_POST_SHADER_PATH);
 
         let initial_shader_source = std::fs::read_to_string(&shader_path)
             .expect("Failed to read fragment shader on startup");
@@ -97,7 +98,7 @@ impl ShaderApp {
             
             // Post-processing
             post_process_enabled: false,
-            post_process_shader_path: None,
+            post_process_shader_path: Some(post_shader_path),
             post_process_renderer: None,
             post_process_uniforms: HashMap::new(),
             post_process_error: Arc::new(Mutex::new(None)),
@@ -378,20 +379,16 @@ impl ShaderApp {
         }
         let time = self.time;
         
-        // Get the actual pixels_per_point for DPI scaling
         let pixels_per_point = ui.ctx().pixels_per_point();
         
         let size = rect.size();
-        // Convert to physical pixels
         let width = (size.x * pixels_per_point) as u32;
         let height = (size.y * pixels_per_point) as u32;
         
-        // Determine if we need two-pass rendering
         let use_post_process = self.post_process_enabled && 
                             self.post_process_renderer.is_some();
         
         if use_post_process {
-            // Ensure intermediate framebuffer is ready with PHYSICAL pixels
             self.ensure_intermediate_fbo(width, height);
             
             let gl = self.gl.clone();
@@ -402,7 +399,6 @@ impl ShaderApp {
             let intermediate_fbo = self.intermediate_fbo.unwrap();
             let intermediate_texture = self.intermediate_texture.unwrap();
             
-            // Add the main pass texture to post-process uniforms
             post_uniforms.insert(
                 "u_mainPass".to_string(),
                 UniformInfo {
@@ -416,24 +412,31 @@ impl ShaderApp {
                 },
             );
             
-            let cb = egui_glow::CallbackFn::new(move |_info, painter| {
+            let cb = egui_glow::CallbackFn::new(move |info, painter| {
                 use glow::HasContext as _;
                 let gl = painter.gl();
                 
+                // Get proper viewport from callback info
+                let viewport = info.viewport_in_pixels();
+                let vp_width = viewport.width_px;
+                let vp_height = viewport.height_px;
+                let vp_x = viewport.left_px;
+                let vp_y = viewport.from_bottom_px;
+                
                 unsafe {
-                    // === PASS 1: Render main shader to texture ===
+                    // === PASS 1: Render main shader to intermediate texture ===
                     gl.bind_framebuffer(glow::FRAMEBUFFER, Some(intermediate_fbo));
                     gl.viewport(0, 0, width as i32, height as i32);
                     gl.clear_color(0.0, 0.0, 0.0, 1.0);
                     gl.clear(glow::COLOR_BUFFER_BIT);
                     
-                    // Use physical size for u_resolution
                     let physical_size = egui::Vec2::new(width as f32, height as f32);
                     shader_renderer.lock().paint(gl, time, physical_size, &uniforms);
                     
-                    // === PASS 2: Render post-process with main pass as texture ===
+                    // === PASS 2: Render post-process to screen ===
                     gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-                    gl.viewport(0, 0, width as i32, height as i32);
+                    // Use viewport from callback info (this positions it correctly)
+                    gl.viewport(vp_x as i32, vp_y as i32, vp_width as i32, vp_height as i32);
                     
                     post_renderer.lock().paint(gl, time, physical_size, &post_uniforms);
                 }
@@ -445,7 +448,7 @@ impl ShaderApp {
             };
             ui.painter().add(callback);
         } else {
-            // Single-pass rendering (original behavior)
+            // Single-pass rendering
             let shader_renderer = self.shader_renderer.clone();
             let uniforms = self.uniforms.clone();
 
@@ -463,17 +466,17 @@ impl ShaderApp {
 }
 
 /// Get the default shader path relative to the executable
-pub fn get_default_shader_path() -> PathBuf {
+pub fn get_default_shader_path(path: &str) -> PathBuf {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            let shader_path = exe_dir.join(DEFAULT_SHADER_PATH);
+            let shader_path = exe_dir.join(path);
             if shader_path.exists() {
                 return shader_path;
             }
         }
     }
     
-    PathBuf::from(DEFAULT_SHADER_PATH)
+    PathBuf::from(path)
 }
 
 /// Check if FFmpeg is available on the system

@@ -27,7 +27,9 @@ impl eframe::App for ShaderApp {
             .default_width(250.0) 
             .resizable(true)
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
                     ui.heading("Controls");
                     ui.add_space(8.0);
 
