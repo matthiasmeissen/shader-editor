@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct UniformInfo {
-    pub _name: String,
     pub uniform_type: UniformType,
     pub value: UniformValue,
 }

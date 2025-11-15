@@ -15,12 +15,14 @@ void main() {
     vec2 p = uv - 0.5;
     p.x *= u_resolution.x / u_resolution.y;
 
-    float d = length(p + sin(u_time));
+    float d = length(vec2(p.x + sin(u_time), p.y));
+    d *= fract(p.x * 4.0 + u_time);
+    d = step(0.4, d);
 
     vec3 tex_color = texture(uTexture1, uv).rgb;
 
     vec3 col = vec3(d);
-    col *= tex_color;
+    //col *= tex_color;
 
     out_color = vec4(col, 1.0);
 }
