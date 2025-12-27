@@ -58,7 +58,7 @@ The heart of the application containing the `ShaderApp` struct. Key responsibili
 - Regex-based parsing of GLSL uniform declarations from shader source
 - Automatic detection of uniform types (float, vec2, vec3, vec4, sampler2D)
 - Smart merging of uniform values across reloads (preserves user adjustments)
-- Built-in uniforms: `u_time`, `u_resolution`
+- Built-in uniforms: `u_time`, `u_resolution`, `u_progress`
 
 **Rendering Pipeline**
 - Single-pass rendering: Direct shader output to screen
@@ -101,7 +101,7 @@ OpenGL rendering abstraction layer:
 - `destroy()`: Clean up OpenGL resources
 
 **Automatic Uniform Binding**
-- Built-in uniforms: `u_time`, `u_resolution`
+- Built-in uniforms: `u_time`, `u_resolution`, `u_progress`
 - Custom uniforms detected from shader source
 - Texture unit management for sampler2D uniforms
 
@@ -122,7 +122,7 @@ User interface implementation using egui (immediate-mode GUI):
 
 **Helper Functions**
 - `render_uniform_controls()`: Generates UI controls based on uniform types
-- Filters out built-in uniforms from UI (`u_time`, `u_resolution`, `u_mainPass`)
+- Filters out built-in uniforms from UI (`u_time`, `u_resolution`, `u_mainPass`, `u_progress`)
 
 ### app/file_io.rs
 
@@ -224,6 +224,11 @@ User writes fragment shaders that:
 **Built-in Uniforms**
 - `u_time`: Animated time value (auto-incremented or manually controlled)
 - `u_resolution`: Viewport dimensions (vec2)
+- `u_progress`: Normalized timeline position (0.0 to 1.0)
+  - Live preview: Always `0.0` (static)
+  - Image export: Always `0.0` (static)
+  - Video export: Animates from `0.0` to `1.0` over the entire video duration
+  - Enables duration-independent animations (same motion whether video is 2sec or 20sec)
 - `u_mainPass`: Auto-injected in post-processing shaders (sampler2D)
 
 **Custom Uniforms**
@@ -327,6 +332,46 @@ void main() {
     out_color = vec4(vec3(gray), color.a);
 }
 ```
+
+### Using `u_progress` for Duration-Independent Animations
+
+The `u_progress` uniform is perfect for creating animations that work consistently regardless of video duration:
+
+```glsl
+#version 330 core
+
+uniform vec2 u_resolution;
+uniform float u_time;      // Actual elapsed time (varies with duration)
+uniform float u_progress;  // Normalized 0.0 to 1.0 (consistent across durations)
+
+out vec4 out_color;
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / u_resolution;
+
+    // Move a sphere from left to right over the entire video duration
+    // This works the same whether the video is 2 seconds or 20 seconds!
+    float sphere_x = mix(-0.8, 0.8, u_progress);
+    float sphere_y = 0.5;
+
+    // Calculate distance to sphere center
+    vec2 sphere_pos = vec2(sphere_x, sphere_y);
+    float dist = length(uv - sphere_pos);
+
+    // Draw sphere
+    vec3 color = dist < 0.1 ? vec3(1.0, 0.5, 0.2) : vec3(0.1);
+
+    // Optional: Add time-based effects that work independently
+    color += 0.1 * sin(u_time * 5.0);
+
+    out_color = vec4(color, 1.0);
+}
+```
+
+**Key Benefits:**
+- `u_progress` ensures the sphere completes its journey in exactly the video duration
+- Change video length in export settings without modifying shader code
+- Combine with `u_time` for effects that need actual elapsed time (oscillations, rotations)
 
 ## Future Extension Points
 

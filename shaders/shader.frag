@@ -4,6 +4,7 @@ precision mediump float;
 in vec2 v_uv;
 uniform vec2 u_resolution;
 uniform float u_time;
+uniform float u_progress;
 uniform float uParam1;
 uniform float uParam2;
 uniform sampler2D uTexture1;

@@ -245,7 +245,7 @@ fn render_uniform_controls(
 
     for name in uniform_names {
         // Skip built-in and auto-injected uniforms
-        if name == "u_resolution" || name == "u_time" || name == "u_mainPass" {
+        if name == "u_resolution" || name == "u_time" || name == "u_mainPass" || name == "u_progress" {
             continue;
         }
         

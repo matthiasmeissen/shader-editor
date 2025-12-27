@@ -105,7 +105,7 @@ impl ShaderRenderer {
         }
     }
 
-    pub fn paint(&self, gl: &glow::Context, time: f32, size: egui::Vec2, uniforms: &HashMap<String, UniformInfo>) {
+    pub fn paint(&self, gl: &glow::Context, time: f32, size: egui::Vec2, progress: f32, uniforms: &HashMap<String, UniformInfo>) {
         use glow::HasContext as _;
         // SAFETY: Rendering with a valid OpenGL context and program.
         // All uniform locations are queried before use.
@@ -119,12 +119,15 @@ impl ShaderRenderer {
             if let Some(loc) = gl.get_uniform_location(self.program, "u_resolution") {
                 gl.uniform_2_f32(Some(&loc), size.x, size.y);
             }
+            if let Some(loc) = gl.get_uniform_location(self.program, "u_progress") {
+                gl.uniform_1_f32(Some(&loc), progress);
+            }
 
             let mut texture_unit = 0;
             
             // Set custom uniforms
             for (name, uniform_info) in uniforms {
-                if name == "u_resolution" || name == "u_time" {
+                if name == "u_resolution" || name == "u_time" || name == "u_progress" {
                     continue;
                 }
                 if let Some(loc) = gl.get_uniform_location(self.program, name) {

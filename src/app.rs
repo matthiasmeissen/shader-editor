@@ -431,14 +431,14 @@ impl ShaderApp {
                     gl.clear(glow::COLOR_BUFFER_BIT);
                     
                     let physical_size = egui::Vec2::new(width as f32, height as f32);
-                    shader_renderer.lock().paint(gl, time, physical_size, &uniforms);
+                    shader_renderer.lock().paint(gl, time, physical_size, 0.0, &uniforms);
                     
                     // === PASS 2: Render post-process to screen ===
                     gl.bind_framebuffer(glow::FRAMEBUFFER, None);
                     // Use viewport from callback info (this positions it correctly)
                     gl.viewport(vp_x as i32, vp_y as i32, vp_width as i32, vp_height as i32);
                     
-                    post_renderer.lock().paint(gl, time, physical_size, &post_uniforms);
+                    post_renderer.lock().paint(gl, time, physical_size, 0.0, &post_uniforms);
                 }
             });
             
@@ -453,7 +453,7 @@ impl ShaderApp {
             let uniforms = self.uniforms.clone();
 
             let cb = egui_glow::CallbackFn::new(move |_info, painter| {
-                shader_renderer.lock().paint(painter.gl(), time, rect.size(), &uniforms);
+                shader_renderer.lock().paint(painter.gl(), time, rect.size(), 0.0, &uniforms);
             });
 
             let callback = egui::PaintCallback {

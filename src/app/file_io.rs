@@ -115,10 +115,10 @@ impl ShaderApp {
         
         let pixels = if self.post_process_enabled && self.post_process_renderer.is_some() {
             // Two-pass export
-            self.render_two_pass_to_buffer(self.time, width, height)
+            self.render_two_pass_to_buffer(self.time, 0.0, width, height)
         } else {
             // Single-pass export
-            self.render_frame_to_buffer(self.time, width, height)
+            self.render_frame_to_buffer(self.time, 0.0, width, height)
         };
         
         if let Some(pixels) = pixels {
@@ -143,7 +143,7 @@ impl ShaderApp {
         }
     }
 
-    pub fn render_frame_to_buffer(&self, time: f32, width: u32, height: u32) -> Option<Vec<u8>> {
+    pub fn render_frame_to_buffer(&self, time: f32, progress: f32, width: u32, height: u32) -> Option<Vec<u8>> {
         unsafe {
             use glow::HasContext as _;
             let gl = &*self.gl;
@@ -176,10 +176,10 @@ impl ShaderApp {
             gl.viewport(0, 0, width as i32, height as i32);
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
-            
+
             let size = egui::Vec2::new(width as f32, height as f32);
-            self.shader_renderer.lock().paint(gl, time, size, &self.uniforms);
-            
+            self.shader_renderer.lock().paint(gl, time, size, progress, &self.uniforms);
+
             let mut pixels = vec![0u8; (width * height * 4) as usize];
             gl.read_pixels(
                 0, 0, width as i32, height as i32,
@@ -205,7 +205,7 @@ impl ShaderApp {
     }
 
     // NEW: Two-pass rendering for export
-    pub fn render_two_pass_to_buffer(&self, time: f32, width: u32, height: u32) -> Option<Vec<u8>> {
+    pub fn render_two_pass_to_buffer(&self, time: f32, progress: f32, width: u32, height: u32) -> Option<Vec<u8>> {
         use glow::HasContext as _;
         
         unsafe {
@@ -242,10 +242,10 @@ impl ShaderApp {
             gl.viewport(0, 0, width as i32, height as i32);
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
             gl.clear(glow::COLOR_BUFFER_BIT);
-            
+
             let size = egui::Vec2::new(width as f32, height as f32);
-            self.shader_renderer.lock().paint(gl, time, size, &self.uniforms);
-            
+            self.shader_renderer.lock().paint(gl, time, size, progress, &self.uniforms);
+
             // === PASS 2: Render post-process to final texture ===
             let fbo2 = gl.create_framebuffer().ok()?;
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo2));
@@ -296,7 +296,7 @@ impl ShaderApp {
             );
             
             if let Some(post_renderer) = &self.post_process_renderer {
-                post_renderer.lock().paint(gl, time, size, &post_uniforms);
+                post_renderer.lock().paint(gl, time, size, progress, &post_uniforms);
             }
             
             // Read pixels from final framebuffer
@@ -401,7 +401,12 @@ impl ShaderApp {
         
         for frame in 0..total_frames {
             let time = frame as f32 / fps as f32;
-            
+            let progress = if total_frames > 1 {
+                frame as f32 / (total_frames - 1) as f32
+            } else {
+                0.0
+            };
+
             if frame % 10 == 0 {
                 *self.export_progress.lock() = Some(ExportProgress {
                     current_frame: frame,
@@ -409,12 +414,12 @@ impl ShaderApp {
                     status: format!("Encoding frame {}/{}", frame + 1, total_frames),
                 });
             }
-            
+
             // Render with or without post-processing
             let pixels = if use_post_process {
-                self.render_two_pass_to_buffer(time, width, height)
+                self.render_two_pass_to_buffer(time, progress, width, height)
             } else {
-                self.render_frame_to_buffer(time, width, height)
+                self.render_frame_to_buffer(time, progress, width, height)
             };
             
             if let Some(pixels) = pixels {
