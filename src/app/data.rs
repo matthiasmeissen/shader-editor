@@ -8,6 +8,7 @@ pub struct UniformInfo {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UniformType {
+    Bool,
     Float,
     Vec2,
     Vec3,
@@ -17,6 +18,7 @@ pub enum UniformType {
 
 #[derive(Debug, Clone)]
 pub enum UniformValue {
+    Bool(bool),
     Float(f32),
     Vec2([f32; 2]),
     Vec3([f32; 3]),
@@ -35,6 +37,7 @@ pub struct TextureHandle {
 impl UniformValue {
     pub fn default_for_type(uniform_type: &UniformType) -> Self {
         match uniform_type {
+            UniformType::Bool => UniformValue::Bool(false),
             UniformType::Float => UniformValue::Float(1.0),
             UniformType::Vec2 => UniformValue::Vec2([0.5, 0.5]),
             UniformType::Vec3 => UniformValue::Vec3([0.5, 0.5, 0.5]),

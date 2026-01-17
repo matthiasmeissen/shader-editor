@@ -7,6 +7,7 @@ uniform float u_time;
 uniform float u_progress;
 uniform float uParam1;
 uniform float uParam2;
+uniform bool uParam3;
 uniform sampler2D uTexture1;
 
 out vec4 out_color;
@@ -19,6 +20,8 @@ void main() {
     float d = length(vec2(p.x + sin(u_time), p.y));
     d *= fract(p.x * 4.0 + u_time);
     d = step(0.4, d);
+
+    d = mix(d, 1.0 - d, uParam3);
 
     vec3 tex_color = texture(uTexture1, uv).rgb;
 

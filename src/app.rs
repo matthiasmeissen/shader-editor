@@ -495,7 +495,7 @@ pub fn parse_uniforms(shader_source: &str) -> HashMap<String, UniformInfo> {
     let mut uniforms = HashMap::new();
     
     let re = Regex::new(
-        r"uniform\s+(float|vec2|vec3|vec4|sampler2D)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;"
+        r"uniform\s+(bool|float|vec2|vec3|vec4|sampler2D)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;"
     ).expect("Invalid regex pattern");
     
     for cap in re.captures_iter(shader_source) {
@@ -503,6 +503,7 @@ pub fn parse_uniforms(shader_source: &str) -> HashMap<String, UniformInfo> {
         let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         
         let uniform_type = match type_str {
+            "bool" => UniformType::Bool,
             "float" => UniformType::Float,
             "vec2" => UniformType::Vec2,
             "vec3" => UniformType::Vec3,

@@ -132,6 +132,9 @@ impl ShaderRenderer {
                 }
                 if let Some(loc) = gl.get_uniform_location(self.program, name) {
                     match &uniform_info.value {
+                        UniformValue::Bool(val) => {
+                            gl.uniform_1_i32(Some(&loc), *val as i32);
+                        }
                         UniformValue::Float(val) => {
                             gl.uniform_1_f32(Some(&loc), *val);
                         }
