@@ -253,6 +253,9 @@ fn render_uniform_controls(
             ui.vertical(|ui| {
                 ui.label(&name);
                 match &mut uniform.value {
+                    UniformValue::Bool(val) => {
+                        ui.add(egui::Checkbox::new(val, "Toggle"));
+                    }
                     UniformValue::Float(val) => {
                         ui.add(egui::Slider::new(val, 0.0..=1.0));
                     }
