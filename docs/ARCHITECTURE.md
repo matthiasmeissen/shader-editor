@@ -77,9 +77,10 @@ The heart of the application containing the `ShaderApp` struct. Key responsibili
 
 Defines data structures used throughout the application:
 
-- **`UniformInfo`**: Stores uniform metadata (type and current value)
-- **`UniformType`**: Enum for GLSL types (Float, Vec2, Vec3, Vec4, Sampler2D)
+- **`UniformInfo`**: Stores uniform metadata (type, current value, and optional UI hint)
+- **`UniformType`**: Enum for GLSL types (Bool, Float, Vec2, Vec3, Vec4, Sampler2D)
 - **`UniformValue`**: Enum for actual uniform values
+- **`UniformHint`**: Enum for UI display hints (e.g., Color for color picker)
 - **`TextureHandle`**: Stores texture metadata and OpenGL texture ID
 - **`ExportProgress`**: Progress tracking for video export operations
 
@@ -114,7 +115,7 @@ User interface implementation using egui (immediate-mode GUI):
 - Time controls (auto-play, manual scrubbing, reset)
 - Post-processing toggle and shader loading
 - Export controls (resolution presets, image/video export)
-- Dynamic uniform controls (sliders for floats/vectors, texture pickers for samplers)
+- Dynamic uniform controls (sliders for floats/vectors, checkboxes for bools, texture pickers for samplers, color pickers for vec3/vec4 with `// color` hint)
 - Shader compilation error display
 
 **Central Panel**
@@ -219,7 +220,8 @@ User writes fragment shaders that:
 
 **Auto-Detection**
 - Regex parses `uniform <type> <name>;` declarations from shader source
-- Supports: float, vec2, vec3, vec4, sampler2D
+- Supports: bool, float, vec2, vec3, vec4, sampler2D
+- Optional comment annotations for UI hints: `uniform vec3 u_color; // color`
 
 **Built-in Uniforms**
 - `u_time`: Animated time value (auto-incremented or manually controlled)
@@ -233,8 +235,15 @@ User writes fragment shaders that:
 
 **Custom Uniforms**
 - User-declared uniforms appear as UI controls
-- Float/Vector uniforms: Sliders with configurable ranges
+- Bool uniforms: Checkbox toggle
+- Float uniforms: Slider (0.0 to 1.0 range)
+- Vec2/Vec3/Vec4 uniforms: Component sliders, or color picker if annotated with `// color`
 - Sampler2D uniforms: File picker to load texture images
+
+**UI Hints (Comment Annotations)**
+- Add `// color` after a vec3 or vec4 uniform to display a color picker instead of sliders
+- Case-insensitive: `// Color`, `// COLOR`, `// color` all work
+- Example: `uniform vec4 u_background; // color`
 
 **Value Persistence**
 - User-adjusted uniform values preserved across hot reloads
@@ -297,7 +306,7 @@ cargo run --release
 
 uniform vec2 u_resolution;
 uniform float u_time;
-uniform vec3 u_color;  // Custom uniform - will appear as slider in UI
+uniform vec3 u_color;  // color - will appear as color picker in UI
 uniform float u_scale; // Custom uniform - will appear as slider in UI
 
 out vec4 out_color;

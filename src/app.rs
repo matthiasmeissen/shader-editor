@@ -288,7 +288,12 @@ impl ShaderApp {
         for (name, new_info) in new_uniforms {
             if let Some(old_info) = self.uniforms.get(&name) {
                 if old_info.uniform_type == new_info.uniform_type {
-                    merged.insert(name, old_info.clone());
+                    let info = UniformInfo {
+                        uniform_type: old_info.uniform_type.clone(),
+                        value: old_info.value.clone(),
+                        hint: new_info.hint,
+                    };
+                    merged.insert(name, info);
                     continue;
                 }
             }
@@ -304,7 +309,12 @@ impl ShaderApp {
         for (name, new_info) in new_uniforms {
             if let Some(old_info) = self.post_process_uniforms.get(&name) {
                 if old_info.uniform_type == new_info.uniform_type {
-                    merged.insert(name, old_info.clone());
+                    let info = UniformInfo {
+                        uniform_type: old_info.uniform_type.clone(),
+                        value: old_info.value.clone(),
+                        hint: new_info.hint,
+                    };
+                    merged.insert(name, info);
                     continue;
                 }
             }
@@ -409,6 +419,7 @@ impl ShaderApp {
                         width,
                         height,
                     })),
+                    hint: None,
                 },
             );
             
@@ -495,13 +506,14 @@ pub fn parse_uniforms(shader_source: &str) -> HashMap<String, UniformInfo> {
     let mut uniforms = HashMap::new();
     
     let re = Regex::new(
-        r"uniform\s+(bool|float|vec2|vec3|vec4|sampler2D)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;"
+        r"uniform\s+(bool|float|vec2|vec3|vec4|sampler2D)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;\s*(?://\s*(\w+))?"
     ).expect("Invalid regex pattern");
     
     for cap in re.captures_iter(shader_source) {
         let type_str = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        
+        let hint_type = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+
         let uniform_type = match type_str {
             "bool" => UniformType::Bool,
             "float" => UniformType::Float,
@@ -511,6 +523,19 @@ pub fn parse_uniforms(shader_source: &str) -> HashMap<String, UniformInfo> {
             "sampler2D" => UniformType::Sampler2D,
             _ => continue,
         };
+
+        let hint = match hint_type.to_lowercase().as_str() {
+            "color" => {
+                if type_str == "vec3" {
+                    Some(UniformHint::Color)
+                } else if type_str == "vec4" {
+                    Some(UniformHint::Color)
+                } else {
+                    None
+                }
+            },
+            _ => None,
+        };
         
         let value = UniformValue::default_for_type(&uniform_type);
         
@@ -519,6 +544,7 @@ pub fn parse_uniforms(shader_source: &str) -> HashMap<String, UniformInfo> {
             UniformInfo {
                 uniform_type,
                 value,
+                hint,
             }
         );
     }

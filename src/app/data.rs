@@ -4,6 +4,7 @@ use std::path::PathBuf;
 pub struct UniformInfo {
     pub uniform_type: UniformType,
     pub value: UniformValue,
+    pub hint: Option<UniformHint>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +25,11 @@ pub enum UniformValue {
     Vec3([f32; 3]),
     Vec4([f32; 4]),
     Sampler2D(Option<TextureHandle>), 
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum UniformHint {
+    Color,
 }
 
 #[derive(Debug, Clone)]

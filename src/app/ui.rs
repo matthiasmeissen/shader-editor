@@ -264,15 +264,28 @@ fn render_uniform_controls(
                         ui.add(egui::Slider::new(&mut vals[1], 0.0..=1.0).text("y"));
                     }
                     UniformValue::Vec3(vals) => {
-                        ui.add(egui::Slider::new(&mut vals[0], 0.0..=1.0).text("r"));
-                        ui.add(egui::Slider::new(&mut vals[1], 0.0..=1.0).text("g"));
-                        ui.add(egui::Slider::new(&mut vals[2], 0.0..=1.0).text("b"));
+                        if uniform.hint == Some(UniformHint::Color) {
+                            egui::color_picker::color_edit_button_rgb(ui, vals);
+                        } else {
+                            ui.add(egui::Slider::new(&mut vals[0], 0.0..=1.0).text("r"));
+                            ui.add(egui::Slider::new(&mut vals[1], 0.0..=1.0).text("g"));
+                            ui.add(egui::Slider::new(&mut vals[2], 0.0..=1.0).text("b"));
+                        }
                     }
                     UniformValue::Vec4(vals) => {
-                        ui.add(egui::Slider::new(&mut vals[0], 0.0..=1.0).text("r"));
-                        ui.add(egui::Slider::new(&mut vals[1], 0.0..=1.0).text("g"));
-                        ui.add(egui::Slider::new(&mut vals[2], 0.0..=1.0).text("b"));
-                        ui.add(egui::Slider::new(&mut vals[3], 0.0..=1.0).text("a"));
+                        if uniform.hint == Some(UniformHint::Color) {
+                            let mut rgba = egui::Rgba::from_rgba_unmultiplied(vals[0], vals[1], vals[2], vals[3]);
+                            egui::color_picker::color_edit_button_rgba(ui, &mut rgba, egui::color_picker::Alpha::OnlyBlend);
+                            vals[0] = rgba.r();
+                            vals[1] = rgba.g();
+                            vals[2] = rgba.b();
+                            vals[3] = rgba.a();
+                        } else {
+                            ui.add(egui::Slider::new(&mut vals[0], 0.0..=1.0).text("r"));
+                            ui.add(egui::Slider::new(&mut vals[1], 0.0..=1.0).text("g"));
+                            ui.add(egui::Slider::new(&mut vals[2], 0.0..=1.0).text("b"));
+                            ui.add(egui::Slider::new(&mut vals[3], 0.0..=1.0).text("a"));
+                        }
                     }
                     UniformValue::Sampler2D(texture_handle) => {
                         if let Some(handle) = texture_handle {

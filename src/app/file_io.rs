@@ -292,6 +292,7 @@ impl ShaderApp {
                             height,
                         }
                     )),
+                    hint: None,
                 },
             );
             
