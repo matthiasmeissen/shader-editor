@@ -10,6 +10,23 @@ fn parse_uniforms_detects_float() {
 }
 
 #[test]
+fn parse_uniforms_detects_bool() {
+    let source = "uniform bool u_Param1;";
+    let uniforms = parse_uniforms(source);
+
+    assert!(uniforms.contains_key("u_Param1"));
+    assert_eq!(uniforms["u_Param1"].uniform_type, UniformType::Bool);
+}
+
+#[test]
+fn parse_uniforms_detects_vec2() {
+    let source = "uniform vec2 u_Param2;";
+    let uniforms = parse_uniforms(source);
+
+    assert_eq!(uniforms["u_Param2"].uniform_type, UniformType::Vec2);
+}
+
+#[test]
 fn parse_uniforms_detects_color_hint() {
     let source = "uniform vec3 uColor; // color";
     let uniforms = parse_uniforms(source);
