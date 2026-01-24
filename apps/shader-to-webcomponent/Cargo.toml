@@ -1,0 +1,9 @@
+[package]
+name = "shader-to-webcomponent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+shader-parser = { path = "../../crates/shader-parser" }
+clap = { version = "4.0", features = ["derive"] }
+anyhow = "1.0"

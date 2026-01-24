@@ -22,25 +22,32 @@ This project uses a **Cargo workspace** with separate crates for reusability:
 shader-editor/
 ├── Cargo.toml                     # Workspace root
 ├── apps/
-│   └── shader-editor/             # Main application
+│   ├── shader-editor/             # Desktop GUI application
+│   │   ├── Cargo.toml
+│   │   ├── README.md
+│   │   └── src/
+│   │       ├── main.rs            # Entry point, app initialization
+│   │       ├── app.rs             # Core application logic
+│   │       └── app/
+│   │           ├── data.rs        # Re-exports from shader-parser
+│   │           ├── render_engine.rs
+│   │           ├── ui.rs
+│   │           └── file_io.rs
+│   └── shader-to-webcomponent/    # CLI tool: GLSL → Web Component
 │       ├── Cargo.toml
+│       ├── README.md
 │       └── src/
-│           ├── main.rs            # Entry point, app initialization
-│           ├── app.rs             # Core application logic, shader management
-│           └── app/
-│               ├── data.rs        # Re-exports from shader-parser + ExportProgress
-│               ├── render_engine.rs  # OpenGL rendering logic
-│               ├── ui.rs          # egui UI implementation
-│               └── file_io.rs     # File operations, texture loading, export
+│           └── main.rs
 ├── crates/
 │   └── shader-parser/             # Reusable parsing library
 │       ├── Cargo.toml
+│       ├── README.md
 │       └── src/
 │           └── lib.rs             # UniformInfo, parse_uniforms(), etc.
 ├── shaders/                       # Default shader files
-│   ├── shader.frag               # Main fragment shader
-│   └── post.frag                 # Post-processing shader
-└── docs/                          # Documentation
+│   ├── shader.frag
+│   └── post.frag
+└── docs/                          # Workspace-level documentation
 ```
 
 ## Module Responsibilities
@@ -61,7 +68,29 @@ A standalone library for parsing GLSL shader uniforms. Can be reused by other to
 
 ---
 
-### main.rs
+### apps/shader-to-webcomponent (CLI Tool)
+
+Converts GLSL fragment shaders into self-contained JavaScript Web Components.
+
+**Features:**
+- Transpiles `#version 330 core` → `#version 300 es` for WebGL2
+- Auto-generates JavaScript getters/setters for each uniform
+- Creates Shadow DOM encapsulated custom elements
+- Includes fallback shader for error handling
+- Debug logging comparing parsed vs GPU-active uniforms
+
+**Usage:**
+```bash
+cargo run -p shader-to-webcomponent -- -i shader.frag -o output.js
+```
+
+**Dependencies:** `shader-parser`, `clap`, `anyhow`
+
+---
+
+### apps/shader-editor (Desktop Application)
+
+#### main.rs
 - Application entry point
 - Defines global constants (shader paths, debounce timing)
 - Initializes eframe with OpenGL backend
