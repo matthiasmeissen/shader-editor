@@ -16,23 +16,50 @@ This is a **real-time GLSL fragment shader editor and prototyping tool** built i
 
 ## Project Structure
 
+This project uses a **Cargo workspace** with separate crates for reusability:
+
 ```
 shader-editor/
-├── src/
-│   ├── main.rs                    # Entry point, app initialization
-│   ├── app.rs                     # Core application logic, shader management
-│   └── app/                       # Submodules
-│       ├── data.rs                # Data structures and types
-│       ├── render_engine.rs       # OpenGL rendering logic
-│       ├── ui.rs                  # egui UI implementation
-│       └── file_io.rs             # File operations, texture loading, export
+├── Cargo.toml                     # Workspace root
+├── apps/
+│   └── shader-editor/             # Main application
+│       ├── Cargo.toml
+│       └── src/
+│           ├── main.rs            # Entry point, app initialization
+│           ├── app.rs             # Core application logic, shader management
+│           └── app/
+│               ├── data.rs        # Re-exports from shader-parser + ExportProgress
+│               ├── render_engine.rs  # OpenGL rendering logic
+│               ├── ui.rs          # egui UI implementation
+│               └── file_io.rs     # File operations, texture loading, export
+├── crates/
+│   └── shader-parser/             # Reusable parsing library
+│       ├── Cargo.toml
+│       └── src/
+│           └── lib.rs             # UniformInfo, parse_uniforms(), etc.
 ├── shaders/                       # Default shader files
 │   ├── shader.frag               # Main fragment shader
 │   └── post.frag                 # Post-processing shader
-└── Cargo.toml                    # Dependencies
+└── docs/                          # Documentation
 ```
 
 ## Module Responsibilities
+
+### crates/shader-parser (Library Crate)
+
+A standalone library for parsing GLSL shader uniforms. Can be reused by other tools (e.g., web-based shader editors, CLI tools).
+
+**Exports:**
+- `UniformInfo`: Uniform metadata (type, value, hint)
+- `UniformType`: Enum for GLSL types (Bool, Float, Vec2, Vec3, Vec4, Sampler2D)
+- `UniformValue`: Enum for actual uniform values
+- `UniformHint`: UI display hints (e.g., Color for color picker)
+- `TextureHandle`: Texture metadata with OpenGL texture ID
+- `parse_uniforms()`: Parse uniform declarations from GLSL source code
+
+**Dependencies:** `regex`, `glow`
+
+---
 
 ### main.rs
 - Application entry point
@@ -55,7 +82,7 @@ The heart of the application containing the `ShaderApp` struct. Key responsibili
 - Preserves application state during hot reloads
 
 **Uniform System**
-- Regex-based parsing of GLSL uniform declarations from shader source
+- Uses `shader_parser::parse_uniforms()` for GLSL uniform detection
 - Automatic detection of uniform types (float, vec2, vec3, vec4, sampler2D)
 - Smart merging of uniform values across reloads (preserves user adjustments)
 - Built-in uniforms: `u_time`, `u_resolution`, `u_progress`
@@ -75,13 +102,12 @@ The heart of the application containing the `ShaderApp` struct. Key responsibili
 
 ### app/data.rs
 
-Defines data structures used throughout the application:
+Re-exports core types from the `shader-parser` crate and defines app-specific types:
 
-- **`UniformInfo`**: Stores uniform metadata (type, current value, and optional UI hint)
-- **`UniformType`**: Enum for GLSL types (Bool, Float, Vec2, Vec3, Vec4, Sampler2D)
-- **`UniformValue`**: Enum for actual uniform values
-- **`UniformHint`**: Enum for UI display hints (e.g., Color for color picker)
-- **`TextureHandle`**: Stores texture metadata and OpenGL texture ID
+**Re-exported from shader-parser:**
+- `UniformInfo`, `UniformType`, `UniformValue`, `UniformHint`, `TextureHandle`
+
+**App-specific types:**
 - **`ExportProgress`**: Progress tracking for video export operations
 
 ### app/render_engine.rs
@@ -153,13 +179,16 @@ File operations and export functionality:
 - **OpenGL**: Graphics API via `glow` crate
 - **GLSL 330 Core**: Shader language
 
-### Key Dependencies
+### Workspace Crates
+- **shader-parser**: Internal library for uniform parsing (depends on regex, glow)
+
+### External Dependencies
 - **eframe 0.23.0**: Application framework built on egui
 - **egui 0.23.0**: Immediate-mode GUI library
 - **egui_glow 0.23.0**: OpenGL backend for egui
 - **glow 0.12.0**: Low-level OpenGL bindings
 - **notify 6.1.1**: Cross-platform file system event watching
-- **regex 1.10**: Uniform declaration parsing
+- **regex 1.10**: Uniform declaration parsing (used by shader-parser)
 - **rfd 0.12**: Native file dialogs (open/save)
 - **image 0.24**: Image loading/saving (PNG, JPEG, etc.)
 - **env_logger 0.11.8**: Logging infrastructure
@@ -292,7 +321,14 @@ User writes fragment shaders that:
 ### Running the Application
 
 ```bash
-cargo run --release
+# Build entire workspace
+cargo build --workspace
+
+# Run the shader editor
+cargo run -p shader-editor --release
+
+# Run tests
+cargo test --workspace
 ```
 
 ### Creating Your First Shader
@@ -396,10 +432,12 @@ The architecture is designed to be extensible. Potential enhancements:
 
 ## Contributing
 
-When contributing to this project, please maintain the existing architectural patterns:
+When contributing to this project:
 
+- **Workspace structure**: App code goes in `apps/`, reusable libraries in `crates/`
+- Consider if new functionality should be a separate crate for reusability
 - Keep modules focused on single responsibilities
 - Use the existing error handling patterns
 - Preserve the hot-reload functionality
 - Add documentation for new uniforms or features
-- Test export functionality thoroughly
+- Test with `cargo test --workspace`
