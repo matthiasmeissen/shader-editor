@@ -4,6 +4,7 @@ mod file_io;
 mod ui;
 
 use data::*;
+use shader_parser::parse_uniforms;
 use crate::{RELOAD_DEBOUNCE_MS, DEFAULT_SHADER_PATH, DEFAULT_POST_SHADER_PATH, FILE_CHECK_TIMEOUT_MS};
 
 use render_engine::ShaderRenderer;
@@ -498,71 +499,3 @@ pub fn is_ffmpeg_available() -> bool {
         .map(|output| output.status.success())
         .unwrap_or(false)
 }
-
-/// Parses GLSL shader source to detect uniform declarations.
-/// 
-/// Scans the source for lines matching `uniform <type> <name>;` and optionally
-/// captures a hint from trailing comments like `// color`.
-///
-/// # Arguments
-///
-/// * `shader_source` - The GLSL fragment shader source code
-///
-/// # Returns
-///
-/// A HashMap mapping uniform names to their `UniformInfo` (type, default value, and hint)
-pub fn parse_uniforms(shader_source: &str) -> HashMap<String, UniformInfo> {
-    use regex::Regex;
-    
-    let mut uniforms = HashMap::new();
-    
-    let re = Regex::new(
-        r"uniform\s+(bool|float|vec2|vec3|vec4|sampler2D)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;\s*(?://\s*(\w+))?"
-    ).expect("Invalid regex pattern");
-    
-    for cap in re.captures_iter(shader_source) {
-        let type_str = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        let name = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-        let hint_type = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-
-        let uniform_type = match type_str {
-            "bool" => UniformType::Bool,
-            "float" => UniformType::Float,
-            "vec2" => UniformType::Vec2,
-            "vec3" => UniformType::Vec3,
-            "vec4" => UniformType::Vec4,
-            "sampler2D" => UniformType::Sampler2D,
-            _ => continue,
-        };
-
-        let hint = match hint_type.to_lowercase().as_str() {
-            "color" => {
-                if type_str == "vec3" {
-                    Some(UniformHint::Color)
-                } else if type_str == "vec4" {
-                    Some(UniformHint::Color)
-                } else {
-                    None
-                }
-            },
-            _ => None,
-        };
-        
-        let value = UniformValue::default_for_type(&uniform_type);
-        
-        uniforms.insert(
-            name.to_string(),
-            UniformInfo {
-                uniform_type,
-                value,
-                hint,
-            }
-        );
-    }
-    
-    uniforms
-}
-
-
-#[cfg(test)]
-mod tests;

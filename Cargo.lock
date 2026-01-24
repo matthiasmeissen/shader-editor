@@ -2755,8 +2755,16 @@ dependencies = [
  "image",
  "log",
  "notify",
- "regex",
  "rfd",
+ "shader-parser",
+]
+
+[[package]]
+name = "shader-parser"
+version = "0.1.0"
+dependencies = [
+ "glow",
+ "regex",
 ]
 
 [[package]]
